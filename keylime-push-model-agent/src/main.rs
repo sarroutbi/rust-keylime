@@ -11,6 +11,8 @@ mod struct_filler;
 const DEFAULT_TIMEOUT_MILLIS: &str = "5000";
 const HTTPS_PREFIX: &str = "https://";
 const DEFAULT_API_VERSION: &str = "v3.0";
+const DEFAULT_INDEX: &str = "1";
+const DEFAULT_METHOD: &str = "POST";
 
 fn get_api_version(args: &Args) -> String {
     if args.api_version.is_some() {
@@ -19,16 +21,34 @@ fn get_api_version(args: &Args) -> String {
     DEFAULT_API_VERSION.to_string()
 }
 
+fn get_index(args: &Args) -> String {
+    if args.index.is_some() {
+        return args.index.clone().unwrap();
+    }
+    DEFAULT_INDEX.to_string()
+}
+
+fn get_index_suffix(args: &Args) -> String {
+    let index = get_index(args);
+    if args.method.is_some() && args.method.as_ref().unwrap() == "PATCH" {
+        return format!("/{index}");
+    }
+    "".to_string()
+}
+
 fn get_attestation_request_url(args: &Args) -> String {
-    let id = args.id.clone();
+    let id = args.identifier.clone();
     let verifier_url = args.verifier_url.clone();
     let api_version = get_api_version(args);
+    let index_suffix = get_index_suffix(args);
     if verifier_url.ends_with('/') {
         return format!(
-            "{verifier_url}{api_version}/agents/{id}/attestations"
+            "{verifier_url}{api_version}/agents/{id}/attestations{index_suffix}"
         );
     }
-    format!("{verifier_url}/{api_version}/agents/{id}/attestations")
+    format!(
+        "{verifier_url}/{api_version}/agents/{id}/attestations{index_suffix}"
+    )
 }
 
 fn get_https_client(args: &Args) -> Result<reqwest::Client, Box<dyn Error>> {
@@ -130,13 +150,17 @@ struct Args {
     /// identifier
     /// Default: 12345678
     #[arg(long, default_value = "12345678")]
-    id: String,
+    identifier: String,
+    /// index
+    /// Default: 1
+    #[arg(long, default_value = "1")]
+    index: Option<String>,
     /// insecure
     #[arg(long, action, default_missing_value = "true")]
     insecure: Option<bool>,
     /// Method
     /// Default: "POST"
-    #[arg(long, default_value = "POST")]
+    #[arg(long, default_value = DEFAULT_METHOD)]
     method: Option<String>,
     /// Timeout in milliseconds
     /// Default: 5000
@@ -152,6 +176,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("API version: {}", get_api_version(&args));
     println!("Verifier URL: {}", args.verifier_url);
     println!("Timeout: {}", args.timeout);
+    println!("Identifier: {}", args.identifier);
+    println!("Index: {}", get_index(&args));
+    println!(
+        "Method: {}",
+        args.method.clone().unwrap_or(DEFAULT_METHOD.to_string())
+    );
     println!("Certificate file: {}", args.certificate);
     println!("Insecure: {}", args.insecure.unwrap_or(false));
     let res = send_attestation_request(&args).await;
@@ -180,9 +210,10 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/does_not_exist.pem".to_string(),
             insecure: Some(false),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
             json_file: None,
             method: None,
+            index: None,
         })
         .await)
             .is_ok()
@@ -199,9 +230,10 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/unexisting_cert_file".to_string(),
             insecure: Some(false),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
             json_file: None,
             method: None,
+            index: None,
         })
         .await
         {
@@ -227,9 +259,10 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/test_cert_file".to_string(),
             insecure: Some(false),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
             json_file: None,
             method: None,
+            index: None,
         })
         .await
         {
@@ -244,7 +277,8 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/test_cert_file".to_string(),
             insecure: Some(true),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
+            index: None,
             json_file: None,
             method: None,
         })
@@ -261,12 +295,13 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/test_cert_file".to_string(),
             insecure: Some(true),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
             json_file: Some(
                 "./tests/evidence_supported_attestation_request.json"
                     .to_string(),
             ),
             method: None,
+            index: None,
         })
         .await
         {
@@ -294,9 +329,10 @@ mod tests {
                 timeout: TEST_TIMEOUT_MILLIS,
                 certificate: "/tmp/does_not_exists.pem".to_string(),
                 insecure: Some(false),
-                id: "12345678".to_string(),
+                identifier: "12345678".to_string(),
                 json_file: None,
                 method: Some(method.to_string()),
+                index: None,
             })
             .await
             {
@@ -316,15 +352,42 @@ mod tests {
             timeout: TEST_TIMEOUT_MILLIS,
             certificate: "/tmp/does_not_exists.pem".to_string(),
             insecure: Some(false),
-            id: "12345678".to_string(),
+            identifier: "12345678".to_string(),
             json_file: None,
             method: None,
+            index: None,
         });
         assert_eq!(
             url,
             "https://1.2.3.4:5678/v3.0/agents/12345678/attestations"
         );
     } // get_attestation_request_url_test
+
+    #[actix_rt::test]
+    async fn mockoon_based_test() {
+        match send_attestation_request(&Args {
+            api_version: None,
+            verifier_url: "http://localhost:3000".to_string(),
+            timeout: TEST_TIMEOUT_MILLIS,
+            certificate: "/tmp/does_not_exists.pem".to_string(),
+            insecure: Some(false),
+            identifier: "12345678".to_string(),
+            json_file: None,
+            method: Some("POST".to_string()),
+            index: None,
+        })
+        .await
+        {
+            Ok(_) => {
+                if std::env::var("MOCKOON").is_err() {
+                    unreachable!()
+                }
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("error sending request"));
+            }
+        }
+    } // mockoon_based_test
 
     #[actix_rt::test]
     async fn run_test() {
